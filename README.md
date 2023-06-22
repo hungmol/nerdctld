@@ -1,6 +1,6 @@
 # nerdctld
 
-![nerd daemon](nerdctld.png)
+![nerd daemon](metadata/nerdctld.png)
 
 This is a daemon offering a `nerdctl.sock` endpoint.
 
@@ -39,7 +39,7 @@ Docker version | API version
 
 ## Diagram
 
-![diagram](diagram.png)
+![diagram](metadata/diagram.png)
 
 * `docker.sock`
 * `nerdctl.sock`
@@ -215,22 +215,36 @@ It and docs can be found at <https://gin-gonic.com/> with some nice [examples](h
 
 ## Implemented commands
 
-* version
-* info (system info)
-* ps (container ls)
-* inspect (container inspect)
-* images (image ls)
-* inspect (image inspect)
-* history (image history)
-* load (image load)
-* pull (image pull)
-* push (image push)
-* rmi (image rm)
-* save (image save)
-* tag (image tag)
-* volume ls
-* volume inspect
-* build
+|Command|Status|
+|---|---|
+|version| O |
+|info (system info)| O
+|images list(image ls) | O|
+|image create | X| 
+|image delete | X |
+|load (image load)| O |
+|pull (image pull)| O |
+|push (image push)| O |
+|rmi (image rm)| O |
+|save (image save)| O |
+|tag (image tag)| O |
+|container delete (delete /container{id}) | X|
+|container create (post "/containers/create") | X|
+|container restart (post "/containers/{id}/restart") | X|
+|container inspect (get "/containers/{id}/json") | O|
+|container list (get "/containers/json") | O|
+|container start (post "/containers/{id}/start") | X|
+|container stats (get "/containers/{id}/stats" )| X|
+|container stop (post "/containers/{id}/stop" )| X|
+|container top (get "/containers/{id}/top")|X|
+|container logs (get "/containers/{id}/logs")|X|
+|network create (post "/networks/create")|X|
+|network list (get "/networks" ) | X|
+|inspect (image inspect)| O |
+|history (image history)| O |
+|volume ls| O |
+|volume inspect| O |
+|build| O |
 
 Note: using "build" requires the `buildctl` client.
 

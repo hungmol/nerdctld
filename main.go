@@ -15,7 +15,7 @@
    limitations under the License.
 */
 
-package main
+package nerdctld
 
 import (
 	"archive/tar"
@@ -55,23 +55,6 @@ func nerdctlVersion() (string, map[string]string) {
 	}
 	v := strings.TrimSuffix(string(nv), "\n")
 	v = strings.Replace(v, "nerdctl version ", "", 1)
-	return v, nil
-}
-
-func containerdVersion() (string, map[string]string) {
-	nv, err := exec.Command("containerd", "--version").Output()
-	if err != nil {
-		log.Fatal(err)
-	}
-	v := strings.TrimSuffix(string(nv), "\n")
-	// containerd github.com/containerd/containerd Version GitCommit
-	c := strings.SplitN(v, " ", 4)
-	if len(c) == 4 && c[0] == "containerd" {
-		v = strings.Replace(c[2], "v", "", 1)
-		if c[3] != "" {
-			return v, map[string]string{"GitCommit": c[3]}
-		}
-	}
 	return v, nil
 }
 
@@ -237,44 +220,6 @@ func parseImageFilter(param []byte) string {
 	return ""
 }
 
-func nerdctlImages(filter string) []map[string]interface{} {
-	args := []string{"images"}
-	if filter != "" {
-		args = append(args, filter)
-	}
-	args = append(args, "--format", "{{json .}}")
-	nc, err := exec.Command("nerdctl", args...).Output()
-	if err != nil {
-		log.Fatal(err)
-	}
-	var images []map[string]interface{}
-	scanner := bufio.NewScanner(bytes.NewReader(nc))
-	for scanner.Scan() {
-		var image map[string]interface{}
-		err = json.Unmarshal(scanner.Bytes(), &image)
-		if err != nil {
-			log.Fatal(err)
-		}
-		images = append(images, image)
-	}
-	return images
-}
-
-func nerdctlImage(name string) (map[string]interface{}, error) {
-	args := []string{"image", "inspect", "--mode", "dockercompat"}
-	args = append(args, name, "--format", "{{json .}}")
-	nc, err := exec.Command("nerdctl", args...).Output()
-	if err != nil {
-		return nil, err
-	}
-	var image map[string]interface{}
-	err = json.Unmarshal(nc, &image)
-	if err != nil {
-		log.Fatal(err)
-	}
-	return image, nil
-}
-
 func nerdctlHistory(name string) ([]map[string]interface{}, error) {
 	args := []string{"history"}
 	args = append(args, name, "--format", "{{json .}}")
@@ -313,44 +258,6 @@ func getState(status string) string {
 	return ""
 }
 
-func nerdctlContainers(all bool) []map[string]interface{} {
-	args := []string{"ps"}
-	if all {
-		args = append(args, "-a")
-	}
-	args = append(args, "--format", "{{json .}}")
-	nc, err := exec.Command("nerdctl", args...).Output()
-	if err != nil {
-		log.Fatal(err)
-	}
-	var containers []map[string]interface{}
-	scanner := bufio.NewScanner(bytes.NewReader(nc))
-	for scanner.Scan() {
-		var container map[string]interface{}
-		err = json.Unmarshal(scanner.Bytes(), &container)
-		if err != nil {
-			log.Fatal(err)
-		}
-		containers = append(containers, container)
-	}
-	return containers
-}
-
-func nerdctlContainer(name string) (map[string]interface{}, error) {
-	args := []string{"container", "inspect", "--mode", "dockercompat"}
-	args = append(args, name, "--format", "{{json .}}")
-	nc, err := exec.Command("nerdctl", args...).Output()
-	if err != nil {
-		return nil, err
-	}
-	var image map[string]interface{}
-	err = json.Unmarshal(nc, &image)
-	if err != nil {
-		log.Fatal(err)
-	}
-	return image, nil
-}
-
 func parseVolumeFilter(param []byte) string {
 	if len(param) == 0 {
 		return ""
@@ -368,44 +275,6 @@ func parseVolumeFilter(param []byte) string {
 		}
 	}
 	return filter
-}
-
-func nerdctlVolumes(filter string) []map[string]interface{} {
-	args := []string{"volume", "ls"}
-	if filter != "" {
-		args = append(args, "--filter", filter)
-	}
-	args = append(args, "--format", "{{json .}}")
-	nc, err := exec.Command("nerdctl", args...).Output()
-	if err != nil {
-		log.Fatal(err)
-	}
-	var volumes []map[string]interface{}
-	scanner := bufio.NewScanner(bytes.NewReader(nc))
-	for scanner.Scan() {
-		var volume map[string]interface{}
-		err = json.Unmarshal(scanner.Bytes(), &volume)
-		if err != nil {
-			log.Fatal(err)
-		}
-		volumes = append(volumes, volume)
-	}
-	return volumes
-}
-
-func nerdctlVolume(name string) (map[string]interface{}, error) {
-	args := []string{"volume", "inspect"}
-	args = append(args, name, "--format", "{{json .}}")
-	nc, err := exec.Command("nerdctl", args...).Output()
-	if err != nil {
-		return nil, err
-	}
-	var volume map[string]interface{}
-	err = json.Unmarshal(nc, &volume)
-	if err != nil {
-		log.Fatal(err)
-	}
-	return volume, nil
 }
 
 func unixTime(s string) int64 {
@@ -1323,7 +1192,7 @@ func setupRouter() *gin.Engine {
 
 var rootCmd = &cobra.Command{
 	Use:          "nerdctld",
-	Short:        "A docker api endpoint for nerdctl and containerd",
+	Short:        "A Docker REST API endpoint for nerdctl and containerd",
 	RunE:         run,
 	Version:      version(),
 	SilenceUsage: true,

@@ -1,4 +1,4 @@
-module github.com/afbjorklund/nerdctld
+module github.com/hungmol/nerdctld
 
 go 1.17
 
