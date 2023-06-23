@@ -3,3 +3,4 @@ nerdctld
 *.rpm
 *.tgz
 *.tar.gz
+*.vagrant

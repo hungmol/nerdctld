@@ -1,0 +1,10 @@
+nodes:
+  workers:
+    cpu: 2
+    memory: 2048
+
+network:
+  control_ip: 192.168.56.22
+  
+software: 
+  box: bento/debian-11.6
