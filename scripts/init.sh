@@ -14,6 +14,7 @@ sudo pip3 install pip --upgrade
 # Install golang
 wget https://go.dev/dl/go1.20.5.linux-amd64.tar.gz -O go1.20.5.linux-amd64.tar.gz
 sudo rm -rf /usr/local/go && sudo tar -C /usr/local -xzf go1.20.5.linux-amd64.tar.gz
+rm -rf go1.20.5.linux-amd64.tar.gz
 sudo echo "export PATH=$PATH:/usr/local/go/bin" >> /etc/profile
 sudo echo "export PATH=$PATH:/usr/local/go/bin" >> ~/.profile
 
@@ -32,3 +33,9 @@ sudo systemctl enable buildkit.service
 sudo systemctl start buildkit.service
 
 sudo rm -rf nerdctl*
+
+# Create nerdctld group
+sudo addgroup nerdctl
+
+# Reboot to apply changed
+# sudo reboot

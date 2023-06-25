@@ -15,7 +15,7 @@
    limitations under the License.
 */
 
-package nerdctld
+package main
 
 import (
 	"archive/tar"

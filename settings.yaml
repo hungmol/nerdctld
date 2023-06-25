@@ -1,7 +1,7 @@
 nodes:
   workers:
     cpu: 2
-    memory: 2048
+    memory: 1500
 
 network:
   control_ip: 192.168.56.22

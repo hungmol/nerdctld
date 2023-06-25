@@ -1,4 +1,4 @@
-package nerdctld
+package main
 
 import (
 	"bufio"

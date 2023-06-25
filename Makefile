@@ -2,13 +2,14 @@
 GO ?= go
 
 PREFIX ?= /usr/local
+ROOT_DIR:=$(shell dirname $(realpath $(firstword $(MAKEFILE_LIST))))
 
 all: binaries
 
 VERSION = 0.3.1
 
 nerdctld: main.go go.mod
-	$(GO) build -o $@ $(BUILDFLAGS)
+	$(GO) build -o $(ROOT_DIR)/bin/$@ $(BUILDFLAGS)
 
 .PHONY: binaries
 binaries: nerdctld
@@ -23,11 +24,12 @@ fix:
 
 .PHONY: install
 install: nerdctld
-	install -D -m 755 nerdctld $(DESTDIR)$(PREFIX)/bin/nerdctld
-	install -D -m 755 nerdctl.service $(DESTDIR)$(PREFIX)/lib/systemd/system/nerdctl.service
-	install -D -m 755 nerdctl.socket $(DESTDIR)$(PREFIX)/lib/systemd/system/nerdctl.socket
-	install -D -m 755 nerdctl.service $(DESTDIR)$(PREFIX)/lib/systemd/user/nerdctl.service
-	install -D -m 755 nerdctl.socket $(DESTDIR)$(PREFIX)/lib/systemd/user/nerdctl.socket
+	install -D -m 755 $(ROOT_DIR)/bin/nerdctld $(DESTDIR)$(PREFIX)/bin/nerdctld
+	install -D -m 755 $(ROOT_DIR)/systemd/nerdctl.service $(DESTDIR)$(PREFIX)/lib/systemd/system/nerdctl.service
+	install -D -m 755 $(ROOT_DIR)/systemd/nerdctl.socket $(DESTDIR)$(PREFIX)/lib/systemd/system/nerdctl.socket
+	install -D -m 755 $(ROOT_DIR)/systemd/10-group.conf /etc/systemd/system/nerdctl.socket.d/10-group.conf
+	# install -D -m 755 $(ROOT_DIR)/systemd/nerdctl.service $(DESTDIR)$(PREFIX)/lib/systemd/user/nerdctl.service
+	# install -D -m 755 $(ROOT_DIR)/systemd/nerdctl.socket $(DESTDIR)$(PREFIX)/lib/systemd/user/nerdctl.socket
 
 .PHONY: artifacts
 artifacts:
@@ -49,4 +51,12 @@ artifacts:
 
 .PHONY: clean
 clean:
-	$(RM) nerdctld
+	$(RM) $(ROOT_DIR)/bin/nerdctld
+	# sudo systemctl stop nerdctl.service
+	# sudo systemctl disable nerdctl.service
+	# sudo systemctl stop nerdctl.socket
+	# sudo systemctl disable nerdctl.socket
+	# $(RM) $(DESTDIR)$(PREFIX)/lib/systemd/system/nerdctl.service
+	# $(RM) $(DESTDIR)$(PREFIX)/lib/systemd/system/nerdctl.socket
+	# $(RM) $(DESTDIR)$(PREFIX)/lib/systemd/user/nerdctl.service
+	# $(RM) $(DESTDIR)$(PREFIX)/lib/systemd/user/nerdctl.socket

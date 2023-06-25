@@ -1,4 +1,4 @@
-package nerdctld
+package main
 
 import (
 	"bufio"
@@ -9,6 +9,7 @@ import (
 	"strings"
 )
 
+// Check containerd version
 func containerdVersion() (string, map[string]string) {
 	nv, err := exec.Command("containerd", "--version").Output()
 	if err != nil {
@@ -26,6 +27,8 @@ func containerdVersion() (string, map[string]string) {
 	return v, nil
 }
 
+
+// List all the created containers
 func nerdctlContainers(all bool) []map[string]interface{} {
 	args := []string{"ps"}
 	if all {
@@ -49,6 +52,7 @@ func nerdctlContainers(all bool) []map[string]interface{} {
 	return containers
 }
 
+// Inspect container
 func nerdctlContainer(name string) (map[string]interface{}, error) {
 	args := []string{"container", "inspect", "--mode", "dockercompat"}
 	args = append(args, name, "--format", "{{json .}}")
