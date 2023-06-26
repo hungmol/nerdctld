@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"io"
 	"log"
 	"os/exec"
 	"strings"
@@ -67,3 +68,42 @@ func nerdctlContainer(name string) (map[string]interface{}, error) {
 	}
 	return image, nil
 }
+
+
+func nerdctlContainerInspect(id string) []map[string]interface{} {
+	nc, err := exec.Command("nerdctl", "container", "inspect", id).Output()
+	if err != nil {
+		log.Fatal(err)
+	}
+	var inspect []map[string]interface{}
+	err = json.Unmarshal(nc, &inspect)
+	if err != nil {
+		log.Fatal(err)
+	}
+	return inspect
+}
+
+
+func nerdctlLogs(id string, w io.Writer) error {
+	cmd := exec.Command("nerdctl", "logs", "-f", id)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return err
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return err
+	}
+	err = cmd.Start()
+	if err != nil {
+		return err
+	}
+	containers[id] = NerdctlContainer{
+		ID:  id,
+		Cmd: cmd,
+		Out: stdout,
+		Err: stderr,
+	}
+	return nil
+}
+

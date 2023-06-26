@@ -34,6 +34,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -43,6 +44,29 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/tj/go-naturaldate"
 )
+
+type NerdctlContainer struct {
+	ID   string
+	TTY  bool
+	Dead bool
+
+	Cmd *exec.Cmd
+	Out io.ReadCloser
+	Err io.ReadCloser
+}
+
+var containers = map[string]NerdctlContainer{}
+
+type NerdctlEvent struct {
+	Status   string
+	ID       string
+	Type     string
+	Action   string
+	Time     int64
+	TimeNano int64
+}
+
+var events = []NerdctlEvent{}
 
 func nerdctlVersion() (string, map[string]string) {
 	nv, err := exec.Command("nerdctl", "--version").Output()
@@ -57,6 +81,7 @@ func nerdctlVersion() (string, map[string]string) {
 	v = strings.Replace(v, "nerdctl version ", "", 1)
 	return v, nil
 }
+
 
 func buildctlVersion() (string, map[string]string) {
 	nv, err := exec.Command("buildctl", "--version").Output()
@@ -251,32 +276,6 @@ func nerdctlTag(source string, target string) error {
 	return nil
 }
 
-func getState(status string) string {
-	if status == "Up" {
-		return "running"
-	}
-	return ""
-}
-
-func parseVolumeFilter(param []byte) string {
-	if len(param) == 0 {
-		return ""
-	}
-	// filters: {"name":{"vol":true}}
-	var filters map[string]map[string]interface{}
-	err := json.Unmarshal(param, &filters)
-	if err != nil {
-		log.Fatal(err)
-	}
-	filter := ""
-	for key, ref := range filters {
-		for val := range ref {
-			filter += fmt.Sprintf("%s=%s", key, val)
-		}
-	}
-	return filter
-}
-
 func unixTime(s string) int64 {
 	t, err := time.Parse("2006-01-02 15:04:05 -0700 MST", s)
 	if err != nil {
@@ -310,6 +309,26 @@ func byteSize(s string) int64 {
 	}
 	return int64(n * float64(m))
 }
+
+func nerdctlRun(name string, w io.Writer, tty bool, command []string, volumes map[string]interface{}) (string, error) {
+	args := []string{"run", "-d"}
+	args = append(args, name)
+	if tty {
+		args = append(args, "-t")
+	}
+	for volume := range volumes {
+		args = append(args, "-v", volume)
+	}
+	args = append(args, command...)
+	log.Printf("run: %v\n", args)
+	nc, err := exec.Command("nerdctl", args...).Output()
+	if err != nil {
+		return "", err
+	}
+	id := strings.Trim(string(nc), "\n")
+	return id, nil
+}
+
 
 func parseObject(param []byte) map[string]interface{} {
 	if len(param) == 0 {
@@ -376,84 +395,6 @@ func nerdctlBuild(dir string, w io.Writer, t string, f string, p string, ba map[
 	return nil
 }
 
-func isUnixSocket(path string) bool {
-	fi, err := os.Stat(path)
-	if err != nil {
-		return false
-	}
-	return fi.Mode().Type() == os.ModeSocket
-}
-
-func buildkitSocket(dir string, namespace string) string {
-	socks := []string{}
-	sock := "buildkitd.sock"
-	if namespace != "default" {
-		subdir := fmt.Sprintf("buildkit-%s", namespace)
-		socks = append(socks, filepath.Join(dir, subdir, sock))
-	}
-	socks = append(socks, filepath.Join(dir, "buildkit-default", sock))
-	for _, s := range socks {
-		if isUnixSocket(s) {
-			return s
-		}
-	}
-	return filepath.Join(dir, "buildkit", sock)
-}
-
-func nerdctlBuildCache() []map[string]interface{} {
-	args := []string{"du"}
-	args = append(args, "--verbose")
-	address := os.Getenv("BUILDKIT_HOST")
-	if uid := os.Geteuid(); uid != 0 {
-		dir := os.Getenv("XDG_RUNTIME_DIR")
-		if dir == "" {
-			dir = fmt.Sprintf("/run/user/%d", uid)
-		}
-		ns := os.Getenv("CONTAINERD_NAMESPACE")
-		if ns == "" {
-			ns = "default"
-		}
-		if address == "" {
-			address = "unix://" + buildkitSocket(dir, ns)
-		}
-		args = append([]string{"--addr", address}, args...)
-	}
-	nc, err := exec.Command("buildctl", args...).Output()
-	if err != nil {
-		log.Print(err)
-		return nil
-	}
-	var records []map[string]interface{}
-	var record = make(map[string]interface{})
-	scanner := bufio.NewScanner(bytes.NewReader(nc))
-	for scanner.Scan() {
-		line := scanner.Text()
-		if len(record) > 0 && (strings.HasPrefix(line, "ID") || strings.HasPrefix(line, "Total")) {
-			records = append(records, record)
-			record = make(map[string]interface{})
-		}
-		fields := strings.Fields(line)
-		if len(fields) != 2 {
-			continue
-		}
-		switch strings.TrimSuffix(fields[0], ":") {
-		case "ID":
-			record["ID"] = fields[1]
-		case "Reclaimable":
-			if reclaimable, err := strconv.ParseBool(fields[1]); err == nil {
-				record["InUse"] = !reclaimable
-			}
-		case "Shared":
-			if shared, err := strconv.ParseBool(fields[1]); err == nil {
-				record["Shared"] = shared
-			}
-		case "Size":
-			record["Size"] = fields[1]
-		}
-	}
-	return records
-}
-
 func extractTar(dst string, r io.Reader) error {
 	tr := tar.NewReader(r)
 	for {
@@ -498,13 +439,6 @@ func stringArray(options []interface{}) []string {
 // regular expression for slashes-in-parameter workaround
 var reImagesPush = regexp.MustCompile(`^/(?P<ver>.*)/images/(?P<name>.*)/push$`)
 
-// regular expression for starting version number in url
-var reApiVersion = regexp.MustCompile(`^/(?P<ver>[0-9][.][0-9]+)/.*$`)
-
-const CurrentAPIVersion = "1.40" // 19.03
-const MinimumAPIVersion = "1.24" // 1.12
-
-//nolint:gocyclo // Handles all the routing in one place
 func setupRouter() *gin.Engine {
 
 	r := gin.Default()
@@ -517,7 +451,7 @@ func setupRouter() *gin.Engine {
 	r.HEAD("/_ping", func(c *gin.Context) {
 		c.Writer.Header().Add("Cache-Control", "no-cache, no-store, must-revalidate")
 		c.Writer.Header().Add("Pragma", "no-cache")
-		c.Writer.Header().Set("API-Version", CurrentAPIVersion)
+		c.Writer.Header().Set("API-Version", "1.40")
 		c.Writer.Header().Set("Content-Length", "0")
 		c.Status(http.StatusOK)
 	})
@@ -525,7 +459,7 @@ func setupRouter() *gin.Engine {
 	r.GET("/_ping", func(c *gin.Context) {
 		c.Writer.Header().Add("Cache-Control", "no-cache, no-store, must-revalidate")
 		c.Writer.Header().Add("Pragma", "no-cache")
-		c.Writer.Header().Set("API-Version", MinimumAPIVersion)
+		c.Writer.Header().Set("API-Version", "1.24")
 		c.Writer.Header().Set("Content-Type", "text/plain")
 		c.String(http.StatusOK, "OK")
 	})
@@ -550,8 +484,8 @@ func setupRouter() *gin.Engine {
 		version := nerdctlVer()
 		client := version["Client"].(map[string]interface{})
 		ver.Version, _ = nerdctlVersion()
-		ver.APIVersion = CurrentAPIVersion
-		ver.MinAPIVersion = MinimumAPIVersion
+		ver.APIVersion = "1.40"
+		ver.MinAPIVersion = "1.24"
 		ver.GitCommit = client["GitCommit"].(string)
 		ver.GoVersion = client["GoVersion"].(string)
 		ver.Os = client["Os"].(string)
@@ -569,9 +503,6 @@ func setupRouter() *gin.Engine {
 		type runtime struct {
 			Path string   `json:"path"`
 			Args []string `json:"runtimeArgs,omitempty"`
-		}
-		type swarm struct {
-			LocalNodeState string
 		}
 		var inf struct {
 			ID                string
@@ -625,7 +556,7 @@ func setupRouter() *gin.Engine {
 			SecurityOptions   []string
 			Runtimes          map[string]runtime
 			DefaultRuntime    string
-			Swarm             swarm
+			//Swarm              swarm.Info
 			// LiveRestoreEnabled determines whether containers should be kept
 			// running when the daemon is shutdown or upon daemon start if
 			// running containers are detected
@@ -661,7 +592,6 @@ func setupRouter() *gin.Engine {
 		inf.ExperimentalBuild = true
 		inf.DefaultRuntime = "runc"
 		inf.Runtimes = map[string]runtime{"runc": {Path: "runc"}}
-		inf.Swarm = swarm{LocalNodeState: "inactive"}
 		inf.InitBinary = "tini"
 		inf.SecurityOptions = stringArray(info["SecurityOptions"].([]interface{}))
 		c.Writer.Header().Set("Content-Type", "application/json")
@@ -851,7 +781,7 @@ func setupRouter() *gin.Engine {
 				NetworkMode string `json:",omitempty"`
 			}
 			//NetworkSettings *SummaryNetworkSettings
-			Mounts []interface{} // MountPoint
+			//Mounts          []MountPoint
 		}
 		ctrs := []ctr{}
 		containers := nerdctlContainers(all == "1")
@@ -862,9 +792,7 @@ func setupRouter() *gin.Engine {
 			ctr.Image = container["Image"].(string)
 			ctr.Command = strings.Trim(container["Command"].(string), "\"")
 			ctr.Created = unixTime(container["CreatedAt"].(string))
-			ctr.State = getState(container["Status"].(string))
 			ctr.Status = container["Status"].(string)
-			ctr.Mounts = make([]interface{}, 0)
 			ctrs = append(ctrs, ctr)
 		}
 		c.Writer.Header().Set("Content-Type", "application/json")
@@ -882,100 +810,258 @@ func setupRouter() *gin.Engine {
 		c.JSON(http.StatusOK, container)
 	})
 
-	r.GET("/:ver/volumes", func(c *gin.Context) {
-		filters := c.Query("filters")
-		filter := parseVolumeFilter([]byte(filters))
-		type ud struct {
-			RefCount int64 `json:"RefCount"`
-			Size     int64 `json:"Size"`
-		}
-		type vol struct {
-			CreatedAt  string `json:",omitempty"`
-			Driver     string
-			Labels     map[string]string
-			Mountpoint string
-			Name       string
-			Options    map[string]string
-			Scope      string
-			Status     map[string]interface{} `json:",omitempty"`
-			UsageData  *ud                    `json:",omitempty"`
-		}
-		vols := []vol{}
-		volumes := nerdctlVolumes(filter)
-		for _, volume := range volumes {
-			var vol vol
-			vol.Name = volume["Name"].(string)
-			vol.Driver = volume["Driver"].(string)
-			vol.Scope = volume["Scope"].(string)
-			vol.Mountpoint = volume["Mountpoint"].(string)
-			vols = append(vols, vol)
-		}
-		c.Writer.Header().Set("Content-Type", "application/json")
-		data := map[string]interface{}{"Volumes": vols, "Warnings": []string{}}
-		c.JSON(http.StatusOK, data)
-	})
-
-	r.GET("/:ver/volumes/:name", func(c *gin.Context) {
-		name := c.Param("name")
-		volume, err := nerdctlVolume(name)
+	r.POST("/:ver/containers/create", func(c *gin.Context) {
+		name := c.Query("name")
+		log.Printf("name: %v", name)
+		var create map[string]interface{}
+		err := c.BindJSON(&create)
 		if err != nil {
-			http.Error(c.Writer, err.Error(), http.StatusNotFound)
+			http.Error(c.Writer, err.Error(), http.StatusBadRequest)
 			return
 		}
+		log.Printf("create: %v", create)
+		image := create["Image"].(string)
+		cmd := create["Cmd"].([]interface{})
+		//env := create["Env"].([]interface{})
+		tty := create["Tty"].(bool)
+		vols := create["Binds"].(map[string]interface{})
+		log.Printf("image: %s", image)
+		log.Printf("cmd: %v", cmd)
+		log.Printf("tty: %v", tty)
+		log.Printf("vols: %v", vols)
+		var container struct {
+			ID       string `json:"Id"`
+			Warnings []string
+		}
+		cmds := []string{}
+		for _, c := range cmd {
+			cmds = append(cmds, c.(string))
+		}
+		// id, err := nerdctlRun(image, c.Writer, tty, cmds, vols)
+		// if err != nil {
+		// 	http.Error(c.Writer, err.Error(), http.StatusInternalServerError)
+		// 	return
+		// }
+		// container.ID = id
+		container.ID = "con cac"
 		c.Writer.Header().Set("Content-Type", "application/json")
-		c.JSON(http.StatusOK, volume)
+		c.JSON(http.StatusCreated, container)
 	})
 
-	r.GET("/:ver/system/df", func(c *gin.Context) {
-		type image struct {
-			ID   string `json:"Id"`
-			Size int64
+	r.GET("/:ver/events", func(c *gin.Context) {
+		c.Writer.Header().Set("Content-Type", "application/json")
+		c.Status(http.StatusOK)
+		for {
+			if len(events) > 0 {
+				e := events[0]
+				data := map[string]interface{}{
+					"status":   e.Status,
+					"id":       e.ID,
+					"type":     e.Type,
+					"action":   e.Action,
+					"time":     e.Time,
+					"timeNano": e.TimeNano,
+				}
+				l, _ := json.Marshal(data)
+				_, err = c.Writer.Write(l)
+				_, err = c.Writer.Write([]byte{'\n'})
+				events = events[1:]
+			}
+			time.Sleep(1000)
 		}
-		type container struct {
-			ID         string `json:"Id"`
-			SizeRw     int64  `json:",omitempty"`
-			SizeRootFs int64  `json:",omitempty"`
+	})
+
+	r.POST("/:ver/containers/:id/attach", func(c *gin.Context) {
+		id := c.Param("id")
+		log.Printf("id: %s", id)
+		err := nerdctlLogs(id, c.Writer)
+		if err != nil {
+			http.Error(c.Writer, err.Error(), http.StatusInternalServerError)
+			return
 		}
-		type ud struct {
-			RefCount int64
-			Size     int64
+		var attach map[string]interface{}
+		stdout := c.Query("stdout")
+		stderr := c.Query("stderr")
+		stream := c.Query("stream")
+		log.Printf("stdout: %s", stdout)
+		log.Printf("stderr: %s", stderr)
+		log.Printf("stream: %s", stream)
+		err = c.ShouldBindJSON(&attach)
+		if err != nil {
+			http.Error(c.Writer, err.Error(), http.StatusInternalServerError)
+			return
 		}
-		type volume struct {
-			CreatedAt string `json:",omitempty"`
-			Name      string
-			UsageData *ud
+		c.Writer.Header().Set("Content-Type", "application/vnd.docker.raw-stream")
+		c.String(http.StatusSwitchingProtocols, "\n")
+		hj, ok := c.Writer.(http.Hijacker)
+		if !ok {
+			http.Error(c.Writer, "webserver doesn't support hijacking", http.StatusInternalServerError)
+			return
 		}
-		type buildcache struct {
-			ID   string
-			Size int64
+		conn, bufrw, err := hj.Hijack()
+		if err != nil {
+			http.Error(c.Writer, err.Error(), http.StatusInternalServerError)
+			return
 		}
-		type DiskUsage struct {
-			LayersSize  int64
-			Images      []interface{} // *ImageSummary
-			Containers  []interface{} // *Container
-			Volumes     []interface{} // *volume.Volume
-			BuildCache  []interface{} // *BuildCache
-			BuilderSize int64
+		defer conn.Close()
+		container := containers[id]
+		var wg sync.WaitGroup
+		if !container.TTY {
+			const STREAM_STDOUT = 1
+			const STREAM_STDERR = 2
+			wg.Add(2)
+			go func() {
+				reader := bufio.NewReader(container.Out)
+				for {
+					if container.Dead {
+						break
+					}
+					line, err := reader.ReadBytes('\n')
+					if err == io.EOF {
+						continue
+					}
+					if err != nil {
+						break
+					}
+					if len(line) > 0 {
+						l := len(line)
+						header := [8]byte{STREAM_STDOUT, 0, 0, 0, 0, 0, 0, byte(l % 256)}
+						_, err = bufrw.Write(header[:])
+						if err != nil {
+							break
+						}
+						_, err = bufrw.Write(line)
+						if err != nil {
+							break
+						}
+						bufrw.Flush()
+					}
+				}
+				wg.Done()
+			}()
+			go func() {
+				reader := bufio.NewReader(container.Err)
+				for {
+					if container.Dead {
+						break
+					}
+					line, err := reader.ReadBytes('\n')
+					if err == io.EOF {
+						continue
+					}
+					if err != nil {
+						break
+					}
+					if len(line) > 0 {
+						l := len(line)
+						header := [8]byte{STREAM_STDERR, 0, 0, 0, 0, 0, 0, byte(l % 256)}
+						_, err = bufrw.Write(header[:])
+						if err != nil {
+							break
+						}
+						_, err = bufrw.Write(line)
+						if err != nil {
+							break
+						}
+						bufrw.Flush()
+					}
+				}
+				wg.Done()
+			}()
 		}
-		var du DiskUsage
-		du.Images = make([]interface{}, 0)
-		for _, i := range nerdctlImages("") {
-			du.Images = append(du.Images, &image{ID: i["ID"].(string), Size: 0})
+
+		for {
+			inspect := nerdctlContainerInspect(id)
+			if len(inspect) > 0 && inspect[0]["State"] != nil {
+				state := inspect[0]["State"].(map[string]interface{})
+				log.Printf("state: %v", state)
+				if !state["Running"].(bool) {
+					container.Dead = true
+					break
+				}
+			}
+			time.Sleep(1000)
 		}
-		du.Containers = make([]interface{}, 0)
-		for _, c := range nerdctlContainers(true) {
-			du.Containers = append(du.Containers, &container{ID: c["ID"].(string), SizeRw: 0, SizeRootFs: 0})
+
+		log.Printf("killing log %d (TERM)", container.Cmd.Process.Pid)
+		err = container.Cmd.Process.Signal(syscall.SIGTERM)
+		if err != nil {
+			log.Printf("%v", err)
 		}
-		du.Volumes = make([]interface{}, 0)
-		for _, v := range nerdctlVolumes("") {
-			du.Volumes = append(du.Volumes, &volume{Name: v["Name"].(string), UsageData: &ud{RefCount: -1, Size: 0}})
-		}
-		du.BuildCache = make([]interface{}, 0)
-		for _, r := range nerdctlBuildCache() {
-			du.BuildCache = append(du.BuildCache, &buildcache{ID: r["ID"].(string), Size: 0})
+
+		wg.Wait()
+	})
+
+	r.POST("/:ver/containers/:id/wait", func(c *gin.Context) {
+		id := c.Param("id")
+		log.Printf("id: %s", id)
+		inspect := nerdctlContainerInspect(id)
+		exitcode := 0.0
+		if len(inspect) > 0 && inspect[0]["State"] != nil {
+			state := inspect[0]["State"].(map[string]interface{})
+			log.Printf("state: %v", state)
+			exitcode = state["ExitCode"].(float64)
 		}
 		c.Writer.Header().Set("Content-Type", "application/json")
-		c.JSON(http.StatusOK, du)
+		c.JSON(http.StatusOK, map[string]interface{}{"StatusCode": exitcode})
+	})
+
+	r.POST("/:ver/containers/:id/start", func(c *gin.Context) {
+		id := c.Param("id")
+		log.Printf("id: %s", id)
+		//container := containers[id]
+		c.Status(http.StatusOK)
+	})
+
+	r.POST("/:ver/containers/:id/stop", func(c *gin.Context) {
+		id := c.Param("id")
+		log.Printf("id: %s", id)
+		//container := containers[id]
+		c.Status(http.StatusOK)
+	})
+
+	r.POST("/:ver/containers/:id/kill", func(c *gin.Context) {
+		id := c.Param("id")
+		log.Printf("id: %s", id)
+		container, found := containers[id]
+		if !found {
+			c.Status(http.StatusNotFound)
+		}
+		signal := c.Query("signal")
+		if signal == "WINCH" {
+			err := container.Cmd.Process.Signal(syscall.SIGWINCH)
+			if err != nil {
+				log.Fatal(err)
+			}
+			c.Status(http.StatusOK)
+			return
+		}
+		container.Dead = true
+		pid := container.Cmd.Process.Pid
+		log.Printf("killing process %d (%s)", pid, signal)
+		if signal == "INT" {
+			err := container.Cmd.Process.Signal(syscall.SIGINT)
+			if err != nil {
+				log.Fatal(err)
+			}
+		} else {
+			err := container.Cmd.Process.Signal(syscall.SIGTERM)
+			if err != nil {
+				log.Fatal(err)
+			}
+		}
+		c.Status(http.StatusNoContent)
+
+		now := time.Now()
+		event := NerdctlEvent{
+			Status:   "destroy",
+			ID:       id,
+			Type:     "container",
+			Action:   "destroy",
+			Time:     now.Unix(),
+			TimeNano: now.UnixNano(),
+		}
+		events = append(events, event)
 	})
 
 	r.POST("/:ver/build", func(c *gin.Context) {
@@ -1036,11 +1122,6 @@ func setupRouter() *gin.Engine {
 			}
 			c.Status(http.StatusOK)
 		}
-		// some clients don't negotiate for the API version, before commands
-		if m := reApiVersion.FindStringSubmatch(c.Request.URL.Path); m == nil {
-			c.Request.URL.Path = "/" + CurrentAPIVersion + c.Request.URL.Path
-			r.HandleContext(c)
-		}
 	})
 
 	return r
@@ -1048,7 +1129,7 @@ func setupRouter() *gin.Engine {
 
 var rootCmd = &cobra.Command{
 	Use:          "nerdctld",
-	Short:        "A Docker REST API endpoint for nerdctl and containerd",
+	Short:        "A docker api endpoint for nerdctl and containerd",
 	RunE:         run,
 	Version:      version(),
 	SilenceUsage: true,
@@ -1109,7 +1190,7 @@ func run(cmd *cobra.Command, args []string) error {
 }
 
 func version() string {
-	return "0.3.1"
+	return "0.2.1"
 }
 
 func main() {

@@ -35,7 +35,18 @@ sudo systemctl start buildkit.service
 sudo rm -rf nerdctl*
 
 # Create nerdctld group
-sudo addgroup nerdctl
+sudo addgroup docker
+sudo usermod -aG docker vagrant
+sudo newgrp docker
 
-# Reboot to apply changed
-# sudo reboot
+# Grant all users in the group "nerdctl" to access without typing sudo
+sudo mkdir -p /etc/systemd/system/nerdctl.socket.d
+sudo cp /vagrant/systemd/10-group.conf /etc/systemd/system/nerdctl.socket.d/10-group.conf
+
+# # Copy nerdctl daemon socket and service
+# sudo cp /vagrant/systemd/nerdctl.service /usr/lib/systemd/system/nerdctl.service
+# sudo cp /vagrant/systemd/nerdctl.socket /usr/lib/systemd/system/nerdctl.socket
+# sudo systemctl enable nerdctl.socket
+# sudo systemctl enable nerdctl.service
+
+# Copy to another folder

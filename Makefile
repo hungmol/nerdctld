@@ -27,9 +27,9 @@ install: nerdctld
 	install -D -m 755 $(ROOT_DIR)/bin/nerdctld $(DESTDIR)$(PREFIX)/bin/nerdctld
 	install -D -m 755 $(ROOT_DIR)/systemd/nerdctl.service $(DESTDIR)$(PREFIX)/lib/systemd/system/nerdctl.service
 	install -D -m 755 $(ROOT_DIR)/systemd/nerdctl.socket $(DESTDIR)$(PREFIX)/lib/systemd/system/nerdctl.socket
-	install -D -m 755 $(ROOT_DIR)/systemd/10-group.conf /etc/systemd/system/nerdctl.socket.d/10-group.conf
-	# install -D -m 755 $(ROOT_DIR)/systemd/nerdctl.service $(DESTDIR)$(PREFIX)/lib/systemd/user/nerdctl.service
-	# install -D -m 755 $(ROOT_DIR)/systemd/nerdctl.socket $(DESTDIR)$(PREFIX)/lib/systemd/user/nerdctl.socket
+	# install -D -m 755 $(ROOT_DIR)/systemd/10-group.conf /$(DESTDIR)$(PREFIX)/lib/systemd/system/nerdctl.socket.d/10-group.conf
+	install -D -m 755 $(ROOT_DIR)/systemd/nerdctl.service $(DESTDIR)$(PREFIX)/lib/systemd/user/nerdctl.service
+	install -D -m 755 $(ROOT_DIR)/systemd/nerdctl.socket $(DESTDIR)$(PREFIX)/lib/systemd/user/nerdctl.socket
 
 .PHONY: artifacts
 artifacts:
